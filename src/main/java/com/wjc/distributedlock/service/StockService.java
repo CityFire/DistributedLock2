@@ -29,13 +29,26 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
  四、乐观锁：时间戳 version版本号 CAS机制(Compare And Swap(Set),比较并交换变量x 旧值A 新值B)
  问题：1.高并发情况下，性能极低 2.ABA问题 3.读写分离情况下导致乐观锁不可靠
 
+ 性能：二>三>一>四  2>3>1>4
+ 场景：三>四>二>一 3>4>2>1
+
  redis
  一、JVM本地锁机制
- 二、redis乐观锁：
+ 二、redis乐观锁：400 不建议使用
  watch：可以监控一个或者多个key的值，如果在事务（exec）执行之前，key的值发生变化则取消事务执行
  multi：开启事务
  exec：执行事务
- 三、分布式锁
+ 三、分布式锁：跨进程 跨服务 跨服务器 场景：超卖线程（NoSQL）缓存击穿 一个热点key过期
+ 分布式锁的实现方式：
+ 1.基于redis实现
+ 2.基于zookeeper/etcd实现
+ 3.基于mysql实现
+ 特征：
+ 1.独占排他使用  setnx
+ 操作：
+ 1.加锁 setnx
+ 2.解锁 del
+ 3.重试：递归 循环
  */
 @Service
 //@Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS) // 多例模式
