@@ -7,6 +7,9 @@ import com.wjc.distributedlock.projo.Stock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
 import org.springframework.context.annotation.ScopedProxyMode;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -28,7 +31,10 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
 
  redis
  一、JVM本地锁机制
- 二、redis乐观锁： watch multi exec
+ 二、redis乐观锁：
+ watch：可以监控一个或者多个key的值，如果在事务（exec）执行之前，key的值发生变化则取消事务执行
+ multi：开启事务
+ exec：执行事务
  三、分布式锁
  */
 @Service
@@ -46,17 +52,40 @@ public class StockService {
 
 //    @Transactional  // MDL 更新 新增 删除 事务注解导致加锁 阻塞
     public void deduct() {
-        // 1.查询库存信息
-        String stock = this.redisTemplate.opsForValue().get("stock");
+        this.redisTemplate.execute(new SessionCallback<Object>() {
+            @Override
+            public Object execute(RedisOperations operations) throws DataAccessException {
+                // watch
+                operations.watch("stock");
+                // 1.查询库存信息
+                String stock = operations.opsForValue().get("stock").toString();
 
-        // 2.判断库存是否充足
-        if (stock != null && stock.length() != 0) {
-            Integer st = Integer.valueOf(stock);
-            if (st > 0) {
-                // 3.扣减库存
-                this.redisTemplate.opsForValue().set("stock", String.valueOf(--st));
-            }
-        }
+                // 2.判断库存是否充足
+                if (stock != null && stock.length() != 0) {
+                    Integer st = Integer.valueOf(stock);
+                    if (st > 0) {
+                        // multi
+                        operations.multi();
+                        // 3.扣减库存
+                        operations.opsForValue().set("stock", String.valueOf(--st));
+                        // exec 执行事务
+                        List exec = operations.exec();
+                        // 如果执行事务的返回结果集为空，则代表减库存是吧，重试
+                        if (exec == null || exec.size() == 0) {
+                            try {
+                                Thread.sleep(40);
+                                deduct();
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                        return exec;
+                    }
+                }
+                return null;
+            };
+        });
+
 
 
     }
