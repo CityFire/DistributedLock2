@@ -64,17 +64,30 @@ public class StockService {
     private StringRedisTemplate redisTemplate;
 
     public void deduct() {
-        // 1.查询库存信息
-        String stock = redisTemplate.opsForValue().get("stock").toString();
-
-        // 2.判断库存是否充足
-        if (stock != null && stock.length() != 0) {
-            Integer st = Integer.valueOf(stock);
-            if (st > 0) {
-                // 3.扣减库存
-                redisTemplate.opsForValue().set("stock", String.valueOf(--st));
-
+        // 加锁setnx
+        while (!this.redisTemplate.opsForValue().setIfAbsent("lock", "111")) {
+        // 重试，循环
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
+        }
+        try {
+            // 1.查询库存信息
+            String stock = redisTemplate.opsForValue().get("stock").toString();
+
+            // 2.判断库存是否充足
+            if (stock != null && stock.length() != 0) {
+                Integer st = Integer.valueOf(stock);
+                if (st > 0) {
+                    // 3.扣减库存
+                    redisTemplate.opsForValue().set("stock", String.valueOf(--st));
+                }
+            }
+        } finally {
+            // 解锁
+            this.redisTemplate.delete("lock");
         }
     }
 
