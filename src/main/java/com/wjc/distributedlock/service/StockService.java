@@ -248,9 +248,19 @@ public class StockService {
                     redisTemplate.opsForValue().set("stock", String.valueOf(--st));
                 }
             }
+
+            this.test();
+
         } finally {
             lock.unlock();
         }
+    }
+
+    public void test() {
+        ZkDistributedLock lock = this.zkClient.getLock("lock");
+        lock.lock();
+        System.out.println("测试可重入锁。。。");
+        lock.unlock();
     }
 
     public void deduct7() {
@@ -269,10 +279,18 @@ public class StockService {
                     // 3.扣减库存
                     redisTemplate.opsForValue().set("stock", String.valueOf(--st));
                 }
+                this.test2();
             }
         } finally {
             lock.unlock();
         }
+    }
+
+    public void test2() {
+        RLock lock = this.redissonClient.getLock("lock");
+        lock.lock();
+        System.out.println("测试可重入锁。。。");
+        lock.unlock();
     }
 
     public void deduct6() {

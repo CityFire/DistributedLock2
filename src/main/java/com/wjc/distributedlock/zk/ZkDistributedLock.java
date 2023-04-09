@@ -22,6 +22,8 @@ public class ZkDistributedLock implements Lock {
 
     private static final String ROOT_PATH = "/locks";
 
+    private static final ThreadLocal<Integer> THREAD_LOCAL = new ThreadLocal<>();
+
     public ZkDistributedLock(ZooKeeper zooKeeper, String lockName) {
         this.zooKeeper = zooKeeper;
         this.lockName = lockName;
@@ -49,8 +51,15 @@ public class ZkDistributedLock implements Lock {
 
     @Override
     public boolean tryLock() {
-        // 创建znode节点过程:为了防止zk客户端程序获取到锁之后，服务器宕机带来的死锁问题，这里创建的是临时节点
         try {
+            // 判断threadLocal中是否已经有锁，有锁直接重入（+1）
+            Integer flag = THREAD_LOCAL.get();
+            if (flag != null && flag > 0) {
+                THREAD_LOCAL.set(flag + 1);
+                return true;
+            }
+            // 创建znode节点过程:为了防止zk客户端程序获取到锁之后，服务器宕机带来的死锁问题，这里创建的是临时节点
+            // 所有请求要求获取锁时，给每一个请求创建临时序列化节点
             currentNodePath = this.zooKeeper.create(ROOT_PATH + "/" + lockName + "-", null, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
             // 获取前置节点，如果前置节点为空，则获取锁成功，否则监听前置节点
             String preNode = this.getPreNode();
@@ -64,10 +73,13 @@ public class ZkDistributedLock implements Lock {
                         countDownlatch.countDown();
                     }
                 }) == null) {
+                    THREAD_LOCAL.set(1);
                     return true;
                 }
                 countDownlatch.await();
             }
+
+            THREAD_LOCAL.set(1);
             return true;
         } catch (Exception e) {
             e.printStackTrace();
@@ -121,9 +133,12 @@ public class ZkDistributedLock implements Lock {
 
     @Override
     public void unlock() {
-       // 删除znode节点的过程
         try {
-            this.zooKeeper.delete(currentNodePath, -1);
+            THREAD_LOCAL.set(THREAD_LOCAL.get() - 1);
+            if (THREAD_LOCAL.get() == 0) {
+                // 删除znode节点的过程
+                this.zooKeeper.delete(currentNodePath, -1);
+            }
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (KeeperException e) {
