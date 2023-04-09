@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.wjc.distributedlock.mapper.StockMapper;
 import com.wjc.distributedlock.projo.Stock;
+import jodd.util.StringUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
 import org.springframework.context.annotation.ScopedProxyMode;
@@ -16,6 +17,8 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /*
@@ -45,6 +48,14 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
  3.基于mysql实现
  特征：
  1.独占排他使用  setnx
+ 2.防死锁发生
+ 如果redis客户端程序从redis服务中获取到锁之后立马宕机。
+ 解决：给锁添加过期时间。expire
+ 3.原子性：
+ 获取锁和过期时间之间：set key value ex 3 nx
+ 4.防误删：解铃还须系铃人
+ 先判断再删除
+ 5.自动续期
  操作：
  1.加锁 setnx
  2.解锁 del
@@ -65,7 +76,8 @@ public class StockService {
 
     public void deduct() {
         // 加锁setnx
-        while (!this.redisTemplate.opsForValue().setIfAbsent("lock", "111")) {
+        String uuid = UUID.randomUUID().toString();
+        while (!this.redisTemplate.opsForValue().setIfAbsent("lock", uuid, 3, TimeUnit.SECONDS)) {
         // 重试，循环
             try {
                 Thread.sleep(50);
@@ -74,6 +86,7 @@ public class StockService {
             }
         }
         try {
+//            this.redisTemplate.expire("lock", 3, TimeUnit.SECONDS);
             // 1.查询库存信息
             String stock = redisTemplate.opsForValue().get("stock").toString();
 
@@ -86,8 +99,10 @@ public class StockService {
                 }
             }
         } finally {
-            // 解锁
-            this.redisTemplate.delete("lock");
+            // 先判断是否自己的锁，再解锁
+            if (StringUtil.equals(this.redisTemplate.opsForValue().get("lock"), uuid)) {
+                this.redisTemplate.delete("lock");
+            }
         }
     }
 
