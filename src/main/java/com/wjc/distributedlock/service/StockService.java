@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.wjc.distributedlock.mapper.StockMapper;
 import com.wjc.distributedlock.projo.Stock;
+import com.wjc.distributedlock.zk.ZkClient;
+import com.wjc.distributedlock.zk.ZkDistributedLock;
 import jodd.util.StringUtil;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -200,6 +202,16 @@ zookeeper分布式锁:
            get -w /xx
        4.子节点变化 NodeChildrenChanged
            ls -w /xx
+    6.java客户端：官方提供 ZkClient Curator
+    7.分布式锁：
+      1.独占排他：znode节点不可重复 自旋锁
+      2.阻塞锁：临时序列化节点
+         1.所有请求要求获取锁时，给每一个请求创建临时序列化节点
+         2.获取当前节点的前置节点，如果前置节点为空，则获取锁成功，否则监听前置节点
+         3.获取锁成功之后执行业务操作，然后释放当前节点的锁
+      3.可重入: 同一线程已经获取过该锁的情况下，可重入
+         1.在节点的内容中记录服务器、线程以及重入信息
+         2.ThreadLocal:线程的局部变量，线程私有
 
  */
 @Service
@@ -218,7 +230,30 @@ public class StockService {
     @Autowired
     private RedissonClient redissonClient;
 
+    @Autowired
+    private ZkClient zkClient;
+
     public void deduct() {
+        ZkDistributedLock lock = this.zkClient.getLock("lock");
+        lock.lock();
+        try {
+            // 1.查询库存信息
+            String stock = redisTemplate.opsForValue().get("stock").toString();
+
+            // 2.判断库存是否充足
+            if (stock != null && stock.length() != 0) {
+                Integer st = Integer.valueOf(stock);
+                if (st > 0) {
+                    // 3.扣减库存
+                    redisTemplate.opsForValue().set("stock", String.valueOf(--st));
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void deduct7() {
         RLock lock = this.redissonClient.getLock("lock");
 //        lock.lock(10, TimeUnit.SECONDS);
         lock.lock();
