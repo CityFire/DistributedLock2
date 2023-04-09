@@ -143,6 +143,64 @@ RedLock算法:
 4.计算剩余锁定时间 = 总的锁定时间 -step3中的消耗时间
 5.如果获取锁失败了，对所有的redis节点释放锁。
 
+
+redisson:redis的java客户端，分布式锁
+玩法:
+   1.引入依赖
+   2.java配置类: RedissonConfig
+     @Bean
+     public RedissonClient redissonClient() {
+         Config config = new Config() ;
+         config.usesingleServer () .setAddress("redis://ip:port") ;
+         return Redisson.create(config);
+    }
+3.代码使用:
+    可重入锁RLock对象
+        RLock lock = this.redissonClient.getLock("xxx");
+        lock.lock() /unlock()
+公平锁:
+   RLock lock = this.redissonClient.getFairLock("xxx");
+   lock.lock() /unlock()
+联锁 和 红锁:
+读写锁:
+   RReadWriteLock rwlock = this,redissonclient.getReadWritelock("xxx");
+   rwLock.readLock() .lock() /unlock();
+   rwlock.writelock() .lock() /unlock();
+信号量:
+   RSemaphore semaphore = this.redissonClient.getSemaphore("xxx");
+   semaphore.trysetPermits(3);
+   semaphore.acquire() /release();
+闭锁:
+   RCountDownlatch cdl = this.redissonclient.getCountDownlatch("xxx");
+   cdl.trysetCount(6);
+   cdl.await() /countDowntch();
+
+
+
+zookeeper分布式锁:
+   1.介绍了zk
+   2.zk下载及安装
+   3.指令:
+       ls
+       get /zookeeper
+       create /aa "test"
+       delete /aa
+       set /aa "test1"
+   4.znode节点类型:
+       永久节点: create /path content
+       临时节点: create -e /path content 只有客户端程序断开链接自动删除
+       永久序列化节点: create -s /path content
+       临时序列化节点: create -s -e /path content
+   5.节点的事件监听:
+       1.节点创建 NodeCreated
+           stat -w /xx
+       2.节点删除 NodeDeleted
+           stat -w /xx
+       3.节点数据变化 NodeDataChanged
+           get -w /xx
+       4.子节点变化 NodeChildrenChanged
+           ls -w /xx
+
  */
 @Service
 //@Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS) // 多例模式
@@ -162,6 +220,7 @@ public class StockService {
 
     public void deduct() {
         RLock lock = this.redissonClient.getLock("lock");
+//        lock.lock(10, TimeUnit.SECONDS);
         lock.lock();
 
         try {
