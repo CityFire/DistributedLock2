@@ -12,10 +12,12 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -53,6 +55,7 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
  解决：给锁添加过期时间。expire
  3.原子性：
  获取锁和过期时间之间：set key value ex 3 nx
+ 判断和释放锁之间：lua脚本
  4.防误删：解铃还须系铃人
  先判断再删除
  5.自动续期
@@ -60,6 +63,44 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
  1.加锁 setnx
  2.解锁 del
  3.重试：递归 循环
+
+ lua脚本
+ 一次性发送多个指令给redis，redis单线程 执行指令遵守one-by-one规则
+ EVAL script numkeys key [key...] arg [arg...] 输出的不是print，而是return
+   script:lua脚本字符串
+   numkeys:key列表的元素数量
+   key列表:以空格分割。KEYS[index从1开始]
+   arg列表:以空格分割。ARGV[index从1开始]
+
+ 变量：
+ 全局变量：a=5
+ 局部变量：local a=5
+
+ 分支控制：
+ if 条件
+ then
+    代码块
+ elseif 条件
+ then
+   代码块
+ else
+   代码块
+ end
+
+ eval "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end" 1 lock 123213-12-233-443333
+
+ if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end
+
+ if redis.call('get', KEYS[1]) == ARGV[1]
+ then
+    return redis.call('del', KEYS[1])
+ else
+    return 0
+ end
+
+ key: lock
+ arg:uuid
+
  */
 @Service
 //@Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS) // 多例模式
@@ -100,9 +141,16 @@ public class StockService {
             }
         } finally {
             // 先判断是否自己的锁，再解锁
-            if (StringUtil.equals(this.redisTemplate.opsForValue().get("lock"), uuid)) {
-                this.redisTemplate.delete("lock");
-            }
+            String script = "if redis.call('get', KEYS[1]) == ARGV[1]" +
+                    "then " +
+                    " return redis.call('del', KEYS[1])" +
+                    "else " +
+                    " return 0 " +
+                    "end";
+            this.redisTemplate.execute(new DefaultRedisScript<>(script, Boolean.class), Arrays.asList("lock"), uuid);
+//            if (StringUtil.equals(this.redisTemplate.opsForValue().get("lock"), uuid)) {
+//                this.redisTemplate.delete("lock");
+//            }
         }
     }
 
