@@ -31,9 +31,9 @@ public class ZkTest {
 
             // 节点新增：永久节点 临时节点 永久序列化节点 临时序列化节点
 //            zooKeeper.create("/wjc/test1", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-//            zooKeeper.create("/wjc/test2", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
+            zooKeeper.create("/wjc/test2", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
 //            zooKeeper.create("/wjc/test3", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT_SEQUENTIAL);
-            zooKeeper.create("/wjc/test4", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+//            zooKeeper.create("/wjc/test4", "hello zookeeper".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
             // 查询 判断节点是否存在 stat
             Stat stat = zooKeeper.exists("/wjc", false);
             if (stat != null) {
