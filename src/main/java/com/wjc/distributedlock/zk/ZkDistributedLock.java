@@ -67,7 +67,7 @@ public class ZkDistributedLock implements Lock {
                 // 利用闭锁思想，实现阻塞功能
                 CountDownLatch countDownlatch = new CountDownLatch(1);
                 // 因为获取前置节点这个操作，不具备原子性。再次判断zk中的前置节点是否存在
-                if (this.zooKeeper.exists(ROOT_PATH + "/n" + preNode, new Watcher() {
+                if (this.zooKeeper.exists(ROOT_PATH + "/" + preNode, new Watcher() {
                     @Override
                     public void process(WatchedEvent watchedEvent) {
                         countDownlatch.countDown();

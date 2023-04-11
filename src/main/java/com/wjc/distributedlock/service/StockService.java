@@ -463,7 +463,7 @@ public class StockService {
 
     public void testZkSub(InterProcessMutex mutex) throws Exception {
         mutex.acquire();
-        System.out.println("测试可重入锁。。。");
+        System.out.println("InterProcessMutex测试可重入锁。。。");
         mutex.release();
     }
 
@@ -493,7 +493,7 @@ public class StockService {
     public void test3() {
         ZkDistributedLock lock = this.zkClient.getLock("lock");
         lock.lock();
-        System.out.println("测试可重入锁。。。");
+        System.out.println("zkClient测试可重入锁。。。");
         lock.unlock();
     }
 
