@@ -2,12 +2,24 @@ package com.wjc.distributedlock.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.wjc.distributedlock.lock.DistributedLockClient;
+import com.wjc.distributedlock.lock.DistributedRedisLock;
+import com.wjc.distributedlock.mapper.LockMapper;
 import com.wjc.distributedlock.mapper.StockMapper;
+import com.wjc.distributedlock.projo.Lock;
 import com.wjc.distributedlock.projo.Stock;
 import com.wjc.distributedlock.zk.ZkClient;
 import com.wjc.distributedlock.zk.ZkDistributedLock;
 import jodd.util.StringUtil;
+import org.apache.curator.framework.CuratorFramework;
+import org.apache.curator.framework.recipes.locks.InterProcessMutex;
+import org.apache.curator.framework.recipes.locks.InterProcessReadWriteLock;
+import org.apache.curator.framework.recipes.locks.InterProcessSemaphoreV2;
+import org.apache.curator.framework.recipes.locks.Lease;
+import org.apache.curator.framework.recipes.shared.SharedCount;
+import org.redisson.api.RCountDownLatch;
 import org.redisson.api.RLock;
+import org.redisson.api.RSemaphore;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
@@ -21,9 +33,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -111,6 +124,65 @@ mysql悲观锁中使用行级锁：1.锁的查询或者更新条件必须是索�
 
  key: lock
  arg:uuid
+
+可重入级加锁流程：ReentrantLock.lock) --> NonfairSync.lock() --> AQS.acouire(1) --> NonfairSync.tryAcquire(1) --> Sunc.nonfairTeen
+   1.CAS获取锁，如果没有线程占用锁(state==0) ，加锁成功并记录当前线程是有锁线程(两次)
+   2.如果state的值不为0，说明锁已经被占用。则判断当前线程是否是有锁线程，如果是则重入 (state + 1)
+   3.否则加锁失败，入队等待
+
+可重入锁解锁流程: ReentrantLock.unlock() --> AQS.release(1) --> Snc.tryRelease(1)
+   1.判断当前线程是否是有锁线程，不是则抛出异常
+   2.对state的值减1之后，判断state的值是否为0，为0则解锁成功，返回true
+   3.如果减1后的值不为0，则返回false
+
+参照ReentrantLock中的非公平可重入锁实现分布式可重入锁:hash + lua脚本
+   加锁:
+      1.判断锁是否存在 (exists) ，则直接获取锁 hset key field value
+      2.如果锁存在则判断是否自己的锁 (hexists)，如果是自己的锁则重入: hincrby key field increment
+      3.否则重试:递归 循环
+
+      if redis.call('exists', KEYS[1]) == 0 or redis.call('hexists', KEYS[1], ARGV[1]) == 1 then  redis.call('hincrby', KEYS[1], ARGV[1], 1) redis.call('expire', KEYS[1], ARGV[2]) return 1 else return 0 end
+
+      if redis.call('exists', KEYS[1]) == 0 or redis.call('hexists', KEYS[1], ARGV[1]) == 1
+      then
+         redis.call('hincrby', KEYS[1], ARGV[1], 1)
+         redis.call('expire', KEYS[1]，ARGV[2])
+         return 1
+      else
+         return 0
+      end
+
+      key: lock
+      arg: uuid 30
+   解锁:
+      if redis.call('hexists', KEYS[1], ARGV[1]) == 0 then return nil elseif redis.call('hincrby', KEYS[1], ARGV[1], -1) == 0 then return redis.call('del', KEYS[1]) else return 0 end
+
+      if redis.call('hexists', KEYS[1], ARGV[1]) == 0
+      then
+          return nil
+      elseif redis.call('hincrby', KEYS[1], ARGV[1], -1) == 0
+      then
+          return redis.call('del', KEYS[1])
+      else
+          return 0
+      end
+
+      key: lock
+      arg: uuid
+
+   自动续期:定时任务(时间驱动 Timer定时器) + lua脚本
+       判断自己的锁是否存在 (hexists)，如果存在则重置过期时间
+       if redis.call('hexists', KEYS[1], ARGV[1]) == 1 then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end
+
+       if redis.call('hexists', KEYS[1], ARGV[1]) == 1
+       then
+           return redis.call('expire', KEYS[1], ARGV[2])
+       else
+           return 0
+       end
+
+       key: lock
+       arg: uuid
 
 
 红锁算法Redlock
@@ -225,6 +297,81 @@ zookeeper分布式锁:
          7.单点故障: zk一般都是集群部署
          8.zk集群:偏向于一致性集群
 
+    8.Curator: Netflix员献给Apache
+        Curator-framework: zk的底层做了一些封装。
+        Curator-recipes: 典型应用场景做了一些封装，分布式锁
+
+        InterProcessMutex: 类似于ReentrantLock可重入锁 分布式版本
+        public InterProcessMutex(CuratorFramework client, String path)
+        public void acquire()
+        public void release()
+
+        InterProcessMutex
+            basePath: 初始化锁时指定的节点路径
+            internals: LockInternals对象，加锁 解锁
+            ConcurrentMap<Thread，LockData> threadData: 记录了重入信息
+            class LockData {
+                Thread lockPath lockCount
+            }
+
+        LockInternals
+            maxLeases:租约，值为1
+            basePath: 初始化锁时指定的节点路径
+            path: basePath + "/lock-"
+
+        加锁: InterProcessMutex,acquire() --> InterProcessMutex.internalLock() -->
+               LockInternals.attemptLock()
+
+     2.InterProcessSemaphoreMutex:不可重入锁
+
+     3.InterProcessReadWriteLock:可重入的读写锁
+         读读可以并发的
+         读写不可以并发
+         写写不可以并发
+         写锁在释放之前会阻塞请求线程，而读锁是不会的。
+
+     4.InterProcessMultiLock:联锁  redisson中的联锁对象
+
+     5. InterProcesssemaphorev2：信号量，限流
+
+     6. 共享计数器：CountDownLatch
+          ShareCount
+          DistributedAtomicNumber:
+              DistributedAtomicLong
+              DistributedAtomicInteger
+
+
+基于MySQL关系型数据库实现：唯一键索引
+   redis：基于Key唯一性
+   zk：基于znode节点唯一性
+
+   思路:
+      1.加锁：INSERT INTO tb_lock (lock_name) values ('lock'）执行成功代表获取锁成功
+      2.释放锁：获取锁成功的请求执行业务操作，执行完成之后通过delete删除对应记录
+      3.重试：递归
+
+
+1.独占排他互斥使用 唯一键索引
+2.防死锁:
+    客户端程序获取到锁之后，客户端程序的服务器宕机。给锁记录添加一个获取锁时间列。
+       额外的定时器检查获取锁的系统时间和当前系统时间的差值是否超过了阀值。
+    不可重入:可重入 记录服务信息 及 线程信息 重入次数
+3.防误删:借助于id的唯一性防止误删
+4.原子性:一个写操作还可以借助于mysgl悲观锁
+5.可重入:
+6.自动续期:服务器内的定时器重置获取锁的系统时间
+7.单机故障，搭建mysql主备
+8.集群情况下锁机制失效问题。
+9.阻塞锁:
+
+总结:
+    1.简易程序: mysql > redis(lua脚本) > zk
+    2.性能: redis > zk > mysgl
+    3.可靠性: zk > redis = mysql
+    追求极致性能: redis
+    追求可靠性:zk简单玩一下，实现独占排他，对性能 对可靠性要求都不高的情况下，选择mysql分布式锁。
+
+
  */
 @Service
 //@Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS) // 多例模式
@@ -240,12 +387,87 @@ public class StockService {
     private StringRedisTemplate redisTemplate;
 
     @Autowired
+    private DistributedLockClient distributedLockClient;
+
+    @Autowired
     private RedissonClient redissonClient;
 
     @Autowired
     private ZkClient zkClient;
 
+    @Autowired
+    private CuratorFramework curatorFramework;
+
+    @Autowired
+    private LockMapper lockMapper;
+
     public void deduct() {
+        try {
+            // 加锁
+            Lock lock = new Lock();
+            lock.setLockName("lock");
+            this.lockMapper.insert(lock);
+
+            // 1.查询库存信息
+            String stock = redisTemplate.opsForValue().get("stock").toString();
+
+            // 2.判断库存是否充足
+            if (stock != null && stock.length() != 0) {
+                Integer st = Integer.valueOf(stock);
+                if (st > 0) {
+                    // 3.扣减库存
+                    redisTemplate.opsForValue().set("stock", String.valueOf(--st));
+                }
+            }
+            // 解锁
+            this.lockMapper.deleteById(lock.getId());
+        } catch (Exception e) {
+            e.printStackTrace();
+            // 重试
+            try {
+                Thread.sleep(50);
+                this.deduct();
+            } catch (InterruptedException ex) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void deduct10() {
+        InterProcessMutex mutex = new InterProcessMutex(curatorFramework, "/curator/locks");
+        try {
+            mutex.acquire();
+            // 1.查询库存信息
+            String stock = redisTemplate.opsForValue().get("stock").toString();
+
+            // 2.判断库存是否充足
+            if (stock != null && stock.length() != 0) {
+                Integer st = Integer.valueOf(stock);
+                if (st > 0) {
+                    // 3.扣减库存
+                    redisTemplate.opsForValue().set("stock", String.valueOf(--st));
+                }
+            }
+
+            this.testZkSub(mutex);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                mutex.release();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void testZkSub(InterProcessMutex mutex) throws Exception {
+        mutex.acquire();
+        System.out.println("测试可重入锁。。。");
+        mutex.release();
+    }
+
+    public void deduct9() {
         ZkDistributedLock lock = this.zkClient.getLock("lock");
         lock.lock();
         try {
@@ -261,21 +483,21 @@ public class StockService {
                 }
             }
 
-            this.test();
+            this.test3();
 
         } finally {
             lock.unlock();
         }
     }
 
-    public void test() {
+    public void test3() {
         ZkDistributedLock lock = this.zkClient.getLock("lock");
         lock.lock();
         System.out.println("测试可重入锁。。。");
         lock.unlock();
     }
 
-    public void deduct7() {
+    public void deduct8() {
         RLock lock = this.redissonClient.getLock("lock");
 //        lock.lock(10, TimeUnit.SECONDS);
         lock.lock();
@@ -300,6 +522,36 @@ public class StockService {
 
     public void test2() {
         RLock lock = this.redissonClient.getLock("lock");
+        lock.lock();
+        System.out.println("测试可重入锁。。。");
+        lock.unlock();
+    }
+
+    public void deduct7() {
+        DistributedRedisLock redisLock = this.distributedLockClient.getRedisLock("lock");
+        redisLock.lock();
+
+        try {
+            // 1.查询库存信息
+            String stock = redisTemplate.opsForValue().get("stock").toString();
+
+            // 2.判断库存是否充足
+            if (stock != null && stock.length() != 0) {
+                Integer st = Integer.valueOf(stock);
+                if (st > 0) {
+                    // 3.扣减库存
+                    redisTemplate.opsForValue().set("stock", String.valueOf(--st));
+                }
+
+//                this.test();
+            }
+        } finally {
+            redisLock.unlock();
+        }
+    }
+
+    public void test() {
+        DistributedRedisLock lock = this.distributedLockClient.getRedisLock("lock");
         lock.lock();
         System.out.println("测试可重入锁。。。");
         lock.unlock();
@@ -367,7 +619,7 @@ public class StockService {
                         if (exec == null || exec.size() == 0) {
                             try {
                                 Thread.sleep(40);
-                                deduct();
+                                deduct5();
                             } catch (InterruptedException e) {
                                 throw new RuntimeException(e);
                             }
@@ -402,7 +654,7 @@ public class StockService {
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-                this.deduct();
+                this.deduct4();
             }
         }
     }
@@ -447,4 +699,95 @@ public class StockService {
 //            lock.unlock();
         }
     }
+
+    public static void main(String[] args) {
+        ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(3);
+        System.out.println("定时任务初始时间：" + System.currentTimeMillis());
+        scheduledExecutorService.scheduleAtFixedRate(() -> {
+            System.out.println("定时任务执行时间：" + System.currentTimeMillis());
+        }, 5, 10, TimeUnit.SECONDS);
+    }
+
+    // semaphore semaphore = new Semaphore (3) :
+
+    public void testSemaphore() {
+        InterProcessSemaphoreV2 semaphoreV2 = new InterProcessSemaphoreV2(curatorFramework, "/curator/locks", 5);
+        try {
+            Lease lease = semaphoreV2.acquire();// 获取资源，获取资源成功的线程可以维续处理业务换作。否则会被阻塞住
+            this.redisTemplate.opsForList().rightPush("log", "10086获取了资源,开始处理业务逻。" + Thread.currentThread().getName());
+            TimeUnit.SECONDS.sleep(10 + new Random().nextInt(10));
+            this.redisTemplate.opsForList().rightPush("log", "10086处理完业务逻辑，释放资源===========" + Thread.currentThread().getName());
+            semaphoreV2.returnLease(lease); // 手动释放资源，后续请求线程就可以获取该资源
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void testSemaphore2() {
+        RSemaphore semaphore = this.redissonClient.getSemaphore("semaphore");
+        semaphore.trySetPermits(5); // 设置资源量 限流的线程数
+        try {
+            semaphore.acquire(); // 获取资源，获取资源成功的线程可以维续处理业务换作。否则会被阻塞住
+            //System.out.println("10010获取了资源，开始处业务逻，" + Thread.currenThread().getName());
+            this.redisTemplate.opsForList().rightPush("log", "10086获取了资源,开始处理业务逻。" + Thread.currentThread().getName());
+            TimeUnit.SECONDS.sleep(10 + new Random().nextInt(10));
+            // System.out.println("10010处理完业务逻辑，释放资源---" + Thread.currentThread() .getName());
+            this.redisTemplate.opsForList().rightPush("log", "10086处理完业务逻辑，释放资源===========" + Thread.currentThread().getName());
+            semaphore.release();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    public void testLatch() {
+        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
+        cdl.trySetCount(6);
+        try {
+            cdl.await();
+            // TODO:一顿操作准备锁门
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void testCountDown() {
+        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
+        // TODO:一顿操作出门
+        cdl.countDown();
+    }
+
+    public void testZkReadLock() {
+        try {
+            InterProcessReadWriteLock readWriteLock = new InterProcessReadWriteLock(curatorFramework, "/curator/rwLock");
+            readWriteLock.readLock().acquire(10, TimeUnit.SECONDS);
+
+//        readWriteLock.readLock().release();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void testZkWriteLock() {
+        try {
+            InterProcessReadWriteLock readWriteLock = new InterProcessReadWriteLock(curatorFramework, "/curator/rwLock");
+            readWriteLock.writeLock().acquire(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void testShareCount() {
+        try {
+            SharedCount sharedCount = new SharedCount(curatorFramework, "/curator/shareCount", 100);
+            sharedCount.start();
+            int count = sharedCount.getCount();
+            int random = new Random().nextInt(1000);
+            sharedCount.setCount(random);
+            System.out.println("共享计数的初始值：" + count + "，现在我改成了：" + random);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 }
+
