@@ -3,9 +3,11 @@ package com.wjc.distributedlock.zk;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import java.util.concurrent.CountDownLatch;
 
 @Component
@@ -38,6 +40,7 @@ public class ZkClient {
         }
     }
 
+    @PreDestroy
     public void destroy() {
         // 释放zk的链接
         try {

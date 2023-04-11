@@ -351,18 +351,18 @@ zookeeper分布式锁:
       3.重试：递归
 
 
-1.独占排他互斥使用 唯一键索引
-2.防死锁:
-    客户端程序获取到锁之后，客户端程序的服务器宕机。给锁记录添加一个获取锁时间列。
+   1.独占排他互斥使用 唯一键索引
+   2.防死锁:
+       客户端程序获取到锁之后，客户端程序的服务器宕机。给锁记录添加一个获取锁时间列。
        额外的定时器检查获取锁的系统时间和当前系统时间的差值是否超过了阀值。
     不可重入:可重入 记录服务信息 及 线程信息 重入次数
-3.防误删:借助于id的唯一性防止误删
-4.原子性:一个写操作还可以借助于mysgl悲观锁
-5.可重入:
-6.自动续期:服务器内的定时器重置获取锁的系统时间
-7.单机故障，搭建mysql主备
-8.集群情况下锁机制失效问题。
-9.阻塞锁:
+   3.防误删:借助于id的唯一性防止误删
+   4.原子性:一个写操作还可以借助于mysgl悲观锁
+   5.可重入:
+   6.自动续期:服务器内的定时器重置获取锁的系统时间
+   7.单机故障，搭建mysql主备
+   8.集群情况下锁机制失效问题。
+   9.阻塞锁:
 
 总结:
     1.简易程序: mysql > redis(lua脚本) > zk
@@ -426,7 +426,7 @@ public class StockService {
             // 重试
             try {
                 Thread.sleep(50);
-                this.deduct();
+//                this.deduct();
             } catch (InterruptedException ex) {
                 e.printStackTrace();
             }
@@ -708,6 +708,23 @@ public class StockService {
         }, 5, 10, TimeUnit.SECONDS);
     }
 
+    public void testLatch() {
+        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
+        cdl.trySetCount(6);
+        try {
+            cdl.await();
+            // TODO:一顿操作准备锁门
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void testCountDown() {
+        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
+        // TODO:一顿操作出门
+        cdl.countDown();
+    }
+
     // semaphore semaphore = new Semaphore (3) :
 
     public void testSemaphore() {
@@ -737,24 +754,6 @@ public class StockService {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-    }
-
-
-    public void testLatch() {
-        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
-        cdl.trySetCount(6);
-        try {
-            cdl.await();
-            // TODO:一顿操作准备锁门
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void testCountDown() {
-        RCountDownLatch cdl = this.redissonClient.getCountDownLatch("cdl");
-        // TODO:一顿操作出门
-        cdl.countDown();
     }
 
     public void testZkReadLock() {
