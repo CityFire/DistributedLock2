@@ -30,6 +30,7 @@ public class Stock {
 
     private Integer count;
 
+//    @Version
     private Integer version;
 
     @TableField(exist = false)
@@ -198,6 +199,7 @@ class StockTest {
         stock.setId(1368888888L);
         stock.setStock(5000);
         stock.setWarehouse("湛江仓库");
+//        stock.setVersion(1);
         stockMapper.updateById(stock);
     }
 
