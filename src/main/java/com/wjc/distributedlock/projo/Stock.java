@@ -1,7 +1,9 @@
 package com.wjc.distributedlock.projo;
 
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
@@ -11,6 +13,7 @@ import com.wjc.distributedlock.projo.query.StockQuery;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -20,7 +23,7 @@ public class Stock {
 
     private Long id;
 
-//    @TableField(value = "product_code") // 字段映射与表名映射不匹配
+    @TableField(value = "product_code") // 字段映射与表名映射不匹配
     private String productCode;
 
     private String warehouse;
@@ -29,6 +32,7 @@ public class Stock {
 
     private Integer version;
 
+    @TableField(exist = false)
     private Integer stock = 5000;
 
     // 编码中添加了数据库中未定义的属性
@@ -42,32 +46,36 @@ public class Stock {
     @TableField(exist = false, select = false)
     private String password;
 
+    // 逻辑删除字段，标记当前记录是否被删除
+    @TableLogic(value = "0", delval = "1")
+    private Integer deleted;
 }
 
 class StockTest {
 
     @Autowired
-    private StockMapper stockMapper;
+    private static StockMapper stockMapper;
 
     public static void main(String[] args) {
 
-        QueryWrapper qw = new QueryWrapper<Lock>();
-
-        LambdaQueryWrapper lqw = new LambdaQueryWrapper<Lock>();
+//        testGetAll();
+        testGetById();
+//        testGetByPage();
+//        testDelete();
 
     }
 
-    void testGetById() {
+    static private void testGetById() {
         Stock stock = stockMapper.selectById(2);
         System.out.println(stock);
     }
 
-    void testGetAll() {
+    static private void testGetAll() {
         List<Stock> stockList = stockMapper.selectList(null);
         System.out.println(stockList);
     }
 
-    void testGetByPage() { // 分页
+    static private void testGetByPage() { // 分页
         IPage page = new Page(1, 2);
         stockMapper.selectPage(page, null);
         System.out.println("当前页码值：" + page.getCurrent());
@@ -77,7 +85,7 @@ class StockTest {
         System.out.println("数据：" + page.getRecords());
     }
 
-    void testGetAllByWrapper() {
+    static private void testGetAllByWrapper() {
         // 方式一：按条件查询
         /*QueryWrapper<Stock> qw = new QueryWrapper<Stock>();
         qw.lt("stock", 2000);
@@ -130,7 +138,7 @@ class StockTest {
 
     }
 
-    private void select() {
+    static private void select() {
         // 查询投影
 //        LambdaQueryWrapper<Stock> lqw = new LambdaQueryWrapper<Stock>();
 //        lqw.select(Stock::getId, Stock::getProductCode, Stock::getWarehouse);
@@ -150,7 +158,7 @@ class StockTest {
         System.out.println(stockList);
     }
 
-    private void testSelect() {
+    static private void testSelect() {
         // 条件查询
         LambdaQueryWrapper<Stock> lqw = new LambdaQueryWrapper<Stock>();
         // 等同于=
@@ -159,7 +167,7 @@ class StockTest {
         System.out.println(stock);
     }
 
-    private void  testSelectScope() {
+    static private void  testSelectScope() {
         // 条件查询
 //        LambdaQueryWrapper<Stock> lqw = new LambdaQueryWrapper<Stock>();
 //        // 查询范围 lt le gt ge eq between
@@ -173,6 +181,41 @@ class StockTest {
 //        lqw.likeRight(Stock::getWarehouse, "深圳");
         List<Stock> stockList = stockMapper.selectList(lqw);
         System.out.println(stockList);
+    }
+
+    static private void testInsert() {
+        Stock stock = new Stock();
+        stock.setId(1433333333L);
+        stock.setStock(3500);
+        stock.setWarehouse("湛江仓库");
+        stock.setProductCode("10759");
+        stock.setCount(30);
+        stockMapper.insert(stock);
+    }
+
+    static private void testUpdate() {
+        Stock stock = new Stock();
+        stock.setId(1368888888L);
+        stock.setStock(5000);
+        stock.setWarehouse("湛江仓库");
+        stockMapper.updateById(stock);
+    }
+
+    static private void testDelete() {
+        // 删除多条记录
+        ArrayList<Long> list = new ArrayList<>();
+        list.add(6L);
+        list.add(6L);
+        stockMapper.deleteBatchIds(list);
+
+        stockMapper.deleteById(6L);
+        System.out.println(stockMapper.selectList(null));
+
+        // 查询多条记录
+//        ArrayList<Long> list = new ArrayList<>();
+//        list.add(1L);
+//        list.add(2L);
+//        stockMapper.selectBatchIds(list);
     }
 
 }
